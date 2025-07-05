@@ -21,8 +21,9 @@ func init() {
 }
 
 func main() {
-	BOT_TOKEN := os.Getenv("TG_BOT_TOKEN")
+	BOT_TOKEN := os.Getenv("TG_BOT_TOKEN") // Токен тг бота
 
+	// Иницизация бота
 	bot, err := tgbotapi.NewBotAPI(BOT_TOKEN)
 	if err != nil {
 		log.Panic(err)
@@ -31,8 +32,9 @@ func main() {
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
 	updates := bot.GetUpdatesChan(u)
+
+	// Бесконечный цикл ожидания сообщений в бота
 	for update := range updates {
 		if update.Message != nil && update.Message.Chat.Type == "private" {
 			userMsg := update.Message.Text
@@ -53,9 +55,11 @@ func main() {
 			}
 
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, aiReply)
-			msg.ReplyToMessageID = update.Message.MessageID
-			msg.ParseMode = "Markdown"
 
+			msg.ReplyToMessageID = update.Message.MessageID
+			msg.ParseMode = "Markdown" // Отправляем сообщением с учетом Markdown, это важно
+
+			// Отправка сообщения ботом в чат
 			if _, err := bot.Send(msg); err != nil {
 				log.Println("Ошибка отправки:", err)
 			}
@@ -63,17 +67,19 @@ func main() {
 	}
 }
 
-// Merge Requests
+// Парсит URL и достает проект и МР ИД
 func parseUrlMr(urlArg string) (projectID string, mrIID int, err error) {
-	GITLAB_DOMAIN := os.Getenv("GITLAB_DOMAIN")
+	GITLAB_DOMAIN := os.Getenv("GITLAB_DOMAIN") // домейн у каждой компании может быть свой
 
-	spliter := "/-/merge_requests/"
+	spliter := "/-/merge_requests/" // стандартный путь для МР в гитлабе, поэтому можем захардкодить
 	url_MR := strings.Split(urlArg, spliter)
 
+	// Если сплиттинг прошел успешно
 	if len(url_MR) < 2 {
 		return "", -1, fmt.Errorf("не валидная ссылка для МР: %v", err)
 	}
 
+	// Достаем МР_ИД и путь до проекта, пригодится для получения изменений
 	mrID := strings.Split(url_MR[1], "/")[0]
 	pathToProject := strings.Split(url_MR[0], fmt.Sprintf("https://%v/", GITLAB_DOMAIN))[1]
 
@@ -85,34 +91,34 @@ func parseUrlMr(urlArg string) (projectID string, mrIID int, err error) {
 	return pathToProject, mrID_Num, nil
 }
 
+// На основе ИД проекта и МР, возвращает JSON изменений кода от GitLab
 func getChangesFromMR(projectID string, mrIID int) (diffsChanges string, err error) {
+	// Необходимые енвы
 	GITLAB_TOKEN := os.Getenv("GITLAB_TOKEN")
 	GITLAB_DOMAIN := os.Getenv("GITLAB_DOMAIN")
 	BASE_URL_API := fmt.Sprintf("https://%s/api/v4", GITLAB_DOMAIN)
 
+	// Инициализация клиента для работы с АПИ GitLab
 	git, err := gitlab.NewClient(GITLAB_TOKEN, gitlab.WithBaseURL(BASE_URL_API))
-
 	if err != nil {
 		return "", fmt.Errorf("ошибка инициализации resty клиента: %v", err)
 	}
-
+	// Получение массива изменений конкретного МР
 	mr, _, err := git.MergeRequests.ListMergeRequestDiffs(projectID, mrIID, nil)
-
 	if err != nil {
 		return "", fmt.Errorf("ошибка получения изменений в мр: %v", err)
 
 	}
-
+	// Итерация и сбор изменений в сообщение для отправки в AI
 	var allChanges string
 	for _, change := range mr {
 		allChanges = allChanges + fmt.Sprintf("Файл: %s\n Изменения:\n%s\n", change.NewPath, change.Diff)
 	}
 
 	return allChanges, nil
-
 }
 
-func askAi(body string) (string, error) {
+func askAi(message string) (string, error) {
 	type Message struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
@@ -143,11 +149,11 @@ func askAi(body string) (string, error) {
 		Messages: []Message{
 			{
 				Role:    "system",
-				Content: "Ты — эксперт по ревью кода. Сначала дай краткое общее представление о том, какие изменения произошли в коде. Далее дай представление по каждому файлу, какие изменения произошли там [Название файла][Путь к файлу][Код изменений]. Далее проверь внесенные изменения на: 1. Читаемость кода. 2. Нет ли повторяющегося кода, 3. соответствует ли код лучшим практикам написания кода. В конце заключение",
+				Content: "Ты — эксперт по ревью кода. 1. Дай краткое общее представление о том, какие изменения произошли в коде. 2.  Дай представление по каждому файлу, какие изменения произошли там [Название файла][Путь к файлу][Код изменений]. Далее проверь внесенные изменения на: 1. Читаемость кода. 2. Нет ли повторяющегося кода, все ли переменные логически названы 3. соответствует ли код лучшим практикам написания кода. В конце дай заключение",
 			},
 			{
 				Role:    "user",
-				Content: body,
+				Content: message,
 			},
 		},
 	}
